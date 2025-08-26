@@ -1,6 +1,6 @@
 README — Rewards & Redeem Microservices (Enterprise Architecture)
 
-Author: Kapil A.
+Author: Kapilan A
 Role: Solution Architect
 Repository: rewards-platform
 Last updated: 2025-08-26
@@ -9,6 +9,8 @@ Rewards & Redeem Microservices
 Overview
 
 This repository demonstrates a cloud-native, event-driven microservices architecture for managing Rewards and Redeem services in an enterprise setting (e.g., hospitality domain — Hotels, Casinos, Dining). The solution is built using Spring Boot, Kafka, and AWS-native services, designed with resiliency, scalability, and observability as first-class citizens.
+
+<img width="1833" height="847" alt="image" src="https://github.com/user-attachments/assets/f65c135c-1a14-4a51-81ec-9a912467bdf8" />
 
 The system allows customers to:
 
@@ -74,7 +76,7 @@ S3 for storing audit logs and batch reports.
 High-Level Architecture Diagram
 
 (Generated separately using prompt — includes Rewards Service, Redeem Service, Auth Service, Kafka, Redis, AWS ECR/ECS deployment, and client applications for Hotels, Casino, Dining.)
-<img width="1833" height="847" alt="image" src="https://github.com/user-attachments/assets/f65c135c-1a14-4a51-81ec-9a912467bdf8" />
+
 
 Tech Stack
 
