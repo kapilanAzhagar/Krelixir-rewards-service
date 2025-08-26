@@ -9,6 +9,11 @@ Overview
 
 This repository contains a production-ready skeleton and deployment guidance for an event-driven Rewards and Redeem platform built for the hospitality domain. The platform computes reward points in real-time from Hotel, Casino and Dining transactional events and supports redemption workflows. The system is designed for AWS with containerized services, an event backbone (Kafka / MSK), secure OAuth2 authentication, resilient communication, and observability.
 
+
+
+<img width="1671" height="905" alt="image" src="https://github.com/user-attachments/assets/61f5ddba-ab5a-4cb2-8038-2f045ca4fa5e" />
+
+
 This document describes:
 
 high-level architecture and design decisions
