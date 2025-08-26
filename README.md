@@ -1,403 +1,165 @@
-Rewards & Redeem Microservices — Architecture and Runbook
+README — Rewards & Redeem Microservices (Enterprise Architecture)
 
-Author: Kapil A. — Solution Architect
-Purpose: Complete technical README describing the end-to-end design, tech stack, runtime flow, dev/run instructions, deployment and operational guidance for the Rewards and Redeem services. This document is written as an architect-level design and runbook you can use in interviews and for implementation.
+Author: Kapil A.
+Role: Solution Architect
+Repository: rewards-platform
+Last updated: 2025-08-26
 
-Table of contents
+Overview
 
-Summary
+This repository contains a production-ready skeleton and deployment guidance for an event-driven Rewards and Redeem platform built for the hospitality domain. The platform computes reward points in real-time from Hotel, Casino and Dining transactional events and supports redemption workflows. The system is designed for AWS with containerized services, an event backbone (Kafka / MSK), secure OAuth2 authentication, resilient communication, and observability.
 
-Architecture overview
+This document describes:
+
+high-level architecture and design decisions
+
+components and responsibilities
+
+tech stack and rationale
+
+local development and run instructions (dev/profile)
+
+build, containerize and push to ECR
+
+deployment guidance (ECS / Fargate + MSK)
+
+operational concerns: security, resilience, scaling, monitoring
+
+testing, CI/CD and next steps
+
+Read this as a solution architect briefing to present in interviews and to use as a checklist for implementation.
+
+High-level architecture
+[Hotel App]   [Casino App]   [Dining App]
+     \            |               /
+      \           |              /
+       +--------> API Gateway <--------- (optional)
+             (synchronous APIs)             (external clients authenticate via OAuth2)
+                     |
+                     v
+               [Auth Service]
+                 (OAuth2 Server)
+                     |
+                     v
+Clients publish events -> [Kafka / MSK] <- Services consume and produce events
+                          /    |    \
+                         /     |     \
+             [Rewards Service] [Redeem Service] [Notification / Reporting]
+                 (consumes reward-events)   (consumes redeem-events)
+                     |                          |
+                     v                          v
+                  RDS (Postgres)           RDS (Postgres)
+                  Redis (ElastiCache)      Redis (ElastiCache)
+                  CloudWatch               CloudWatch
+
+
+All services run as containers (images stored in AWS ECR) and execute in AWS ECS (Fargate) or Kubernetes.
+
+Auth Service issues JWTs (Client Credentials flow) for service-to-service and partner authentication.
+
+Kafka (MSK) is the event backbone. Topics: reward-events, reward-confirmed, redeem-events, redeem-confirmed.
+
+Rewards Service calculates points at runtime (no ledger), persists events to RDS, caches hot balances in Redis, emits confirmation events.
+
+Redeem Service consumes redemption requests, validates and adjusts balances, emits confirmation events consumed by Notification/Reporting.
+
+Key design decisions & rationale
+
+Event-driven core (Kafka/MSK): decouples producers and consumers, supports high-throughput ingestion (hotel/casino/dining spikes), and enables eventual consistency for non-critical reads.
+
+Runtime calculation, no ledger: points are computed on-demand from canonical transactional events. This guarantees data freshness, simplifies reconciliation, and avoids dual writes. If ingestion volume grows, we can optionally maintain precomputed aggregates (snapshots) for hot customers.
+
+OAuth2 (OpenID Connect) for auth: industry standard, stateless JWT validation, scope-based access controls, easy third-party integration.
+
+Stateless microservices: scale horizontally; services are lightweight, maintain no in-process state except cache.
+
+Caching layer (Redis/ElastiCache): reduces repeated computation and upstream calls; short TTL for freshness.
+
+Resilience patterns: retries, circuit-breakers, bulkheads (Resilience4j), and bounded thread pools to protect from cascading failures.
+
+Observability: structured logs, correlation IDs, OpenTelemetry/Prometheus metrics, and CloudWatch integration.
 
 Technology stack
 
-Components and responsibilities
+Languages & Frameworks
 
-Data and event model
+Java 17+
 
-API surface (synchronous)
+Spring Boot 3.x (Web, Security, Data Redis, Actuator)
 
-Event topics (asynchronous)
+Resilience4j (retry, circuit-breaker, bulkhead)
 
-Security and authentication
+Spring Kafka (consumer/producer)
 
-Resiliency and reliability
+Spring Security (OAuth2 resource server)
 
-Caching strategy
+Jackson (JSON serialization)
 
-Observability and tracing
+Infrastructure / Platform
 
-Local development (dev profile, in-memory cache)
+AWS ECR — container registry
 
-Build, containerize and ECR push
+AWS ECS (Fargate) or EKS — container runtime
 
-Kubernetes deployment (ECS / EKS notes)
+Amazon MSK — managed Kafka
 
-CI/CD and release strategy
+Amazon RDS (Postgres) — canonical storage
 
-Testing strategy
+Amazon ElastiCache (Redis) — caching
 
-Troubleshooting & runbook snippets
+Amazon API Gateway / ALB — routing & edge security
 
-Tradeoffs and alternatives
+AWS Secrets Manager — secure secrets
 
-Next steps and extensions
+Amazon CloudWatch — logs/metrics
 
-1. Summary
+Amazon S3 — artifacts / archival
 
-This repository implements two microservices:
+Optional: Service Mesh (Istio / AWS App Mesh) for mTLS and policy
 
-Rewards Service (Resource Service) — calculates awardable points by consuming transactional events (hotel stays, restaurant reservations, casino spend) and responds to direct queries for a customer’s current points. It publishes confirmation events.
+CI/CD / Tooling
 
-Redeem Service — consumes redemption requests, validates balances, performs deduction, and publishes confirmation events for downstream systems.
+GitHub Actions (or CodeBuild) pipelines
 
-System is event-driven (Kafka/MSK) and also supports synchronous query APIs via OAuth2-secured endpoints. Images are stored in AWS ECR and services run on AWS container platform. Redis is used for caching; RDS for persistent storage. The design prioritizes scalability, observability, and resilient integration with external partner applications.
+Docker / Dockerfile multi-stage builds
 
-2. Architecture overview
+Terraform / CloudFormation for infra as code
 
-High-level architecture components and flows:
+WireMock for contract tests
 
-Partner applications (Hotel, Casino, Dining) authenticate with Auth Service (OAuth2 client credentials) and publish business events to Kafka (MSK).
+JUnit + Mockito for unit tests
 
-Kafka topics:
+Repo structure (recommended)
+rewards-platform/
+├── README.md
+├── rewards-service/
+│   ├── src/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── ...
+├── redeem-service/
+│   ├── src/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── ...
+├── auth-service/
+│   ├── src/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── ...
+├── infra/
+│   ├── terraform/ or cloudformation/
+│   └── k8s/ or ecs-manifests/
+├── docs/
+│   ├── architecture-diagrams/   (mermaid / png / plantuml)
+│   └── runbooks/
+└── .github/workflows/
 
-reward-events — business events describing transactions that should generate points
+Local development (no Docker / Windows dev profile)
 
-reward-confirmed — acknowledgements and enriched events after rewards are applied
+Use application-dev.yml for local runs that employ an in-memory cache and embedded connectors. This is intended for developer speed when real infra (Redis, MSK) is not available.
 
-redeem-events — redemption requests
-
-redeem-confirmed — final confirmation events for successful (or failed) redemptions
-
-Rewards Service consumes reward-events, applies rules, updates RDS and Redis, and emits reward-confirmed.
-
-Redeem Service consumes redeem-events, validates using Redis/RDS, updates stores, emits redeem-confirmed.
-
-Auth Service issues JWT tokens; API Gateway validates and routes external requests.
-
-Monitoring: CloudWatch + Prometheus + Grafana + distributed tracing (OpenTelemetry).
-
-Diagrammatically:
-
-Partner Apps -> API Gateway / direct Kafka producers -> Kafka (MSK)
-                       |                                   |
-                       v                                   v
-                   Auth Service                      Rewards Service <-> RDS / Redis
-                                                          |
-                                                          v
-                                                     reward-confirmed -> downstream
-                                                          |
-                                                     Redeem Service (consumes redeem-events)
-
-3. Technology stack
-
-Primary choices (production-ready):
-
-Language: Java 17
-
-Frameworks: Spring Boot 3.x, Spring Security (OAuth2 Resource Server)
-
-Event streaming: Apache Kafka / Amazon MSK
-
-Cache: Redis (Amazon ElastiCache) or in-memory for dev
-
-Persistence: PostgreSQL (Amazon RDS)
-
-Auth: OAuth2 / OpenID Connect (Keycloak / AWS Cognito / Okta)
-
-Containerization: Docker
-
-Container registry: AWS ECR
-
-Orchestration: AWS ECS (Fargate) or EKS
-
-Observability:
-
-Metrics: Micrometer + Prometheus (scrape) → CloudWatch / Grafana
-
-Tracing: OpenTelemetry (Jaeger compatible)
-
-Logs: JSON structured logs → CloudWatch / ELK
-
-Resilience: Resilience4j (Retry, Circuit Breaker, Bulkhead)
-
-Secrets: AWS Secrets Manager
-
-CI/CD: GitHub Actions / AWS CodePipeline (build → test → image → ECR → deploy)
-
-Infra as code: Terraform / CloudFormation / Helm Charts for Kubernetes
-
-4. Components and responsibilities
-
-Auth Service
-
-Issues access tokens for partner systems using client credentials.
-
-Stores client metadata and secrets securely.
-
-Publishes JWKS for token verification.
-
-API Gateway (ALB / API Gateway)
-
-Provides external entry point.
-
-Enforces TLS, rate limiting, WAF rules, and route-level ACLs.
-
-Rewards Service
-
-Consumes reward-events from Kafka.
-
-Calculates points using rules engine (plugin/config-driven).
-
-Updates persistent ledger (RDS) and cache (Redis).
-
-Publishes reward-confirmed events and metrics.
-
-Exposes GET /api/v1/rewards/{customerId} for runtime calculation and POST /api/v1/rewards/query for bulk.
-
-Redeem Service
-
-Consumes redeem-events.
-
-Authenticates & authorizes redemption requests.
-
-Validates points, reserves/deducts atomically.
-
-Publishes redeem-confirmed.
-
-Supporting components
-
-Kafka (MSK): durable event streaming, topic retention policies defined.
-
-RDS: normalized schema for transactions and customer balances.
-
-ElastiCache Redis: hot cache for balances and rate-limiting counters.
-
-Monitoring, tracing, secrets - central.
-
-5. Data and event model
-
-Example event schema (JSON)
-
-reward-event:
-
-{
-  "eventId":"uuid",
-  "eventType":"HOTEL_STAY|DINING|CASINO_SPEND",
-  "customerId":"string",
-  "timestamp":"2025-08-26T11:00:00Z",
-  "payload": { ... }   // type-dependent data
-}
-
-
-reward-confirmed:
-
-{
-  "eventId":"uuid",
-  "customerId":"string",
-  "pointsAwarded": 50,
-  "balanceAfter": 1230,
-  "sourceEventId":"uuid",
-  "timestamp":"2025-08-26T11:00:01Z"
-}
-
-
-redeem-event:
-
-{
-  "redeemRequestId":"uuid",
-  "customerId":"string",
-  "requestedPoints": 100,
-  "merchantContext": { "merchantId":"M1", "orderId":"O123" },
-  "timestamp":"2025-08-26T12:00:00Z"
-}
-
-
-redeem-confirmed:
-
-{
-  "redeemRequestId":"uuid",
-  "customerId":"string",
-  "pointsDeducted": 100,
-  "balanceAfter": 1130,
-  "status":"SUCCESS|FAILED",
-  "timestamp":"2025-08-26T12:00:01Z"
-}
-
-
-Schema design note: Keep payloads small; store full audit data in RDS; use event versioning and schema registry (Confluent / AWS Glue Schema Registry) for contract-safe evolution.
-
-6. API surface (synchronous)
-
-Rewards Service (secured by OAuth2):
-
-GET /api/v1/rewards/{customerId}
-
-Query params: from (ISO date), to (ISO date), breakdown (boolean, default true)
-
-Auth: Bearer token with scope rewards.read
-
-Responses:
-
-200 JSON with totalPoints, breakdown, calculationTimestamp
-
-400 invalid params
-
-401 unauthorized
-
-503 upstream unavailability (with partial results possible)
-
-POST /api/v1/rewards/query
-
-Bulk queries. Body: list of {customerId, from, to}.
-
-Response: list of reward responses.
-
-Redeem Service:
-
-POST /api/v1/redeem
-
-Body: redeem-event JSON.
-
-Auth: Bearer token with scope rewards.redeem
-
-Behavior: validates, pushes redeem-events to Kafka or processes synchronously with guaranteed idempotency. Returns 202 Accepted with redeemRequestId or 409 for conflicts.
-
-Idempotency and correlation: require idempotency-key header for POST operations; persist processed keys with TTL.
-
-7. Event topics (asynchronous)
-
-reward-events — incoming events from partners. Retention: 7–30 days depending on replay needs.
-
-reward-confirmed — positive acknowledgements; subscribed by reporting, notifications, and reconciliation jobs.
-
-redeem-events — incoming redemption requests.
-
-redeem-confirmed — final history for billing, settlements.
-
-dead-letter — failed events for manual inspection (long retention).
-
-Partitioning: partition by customerId (consistent hashing) to preserve ordering per customer. Producer partitioning must be deterministic.
-
-8. Security and authentication
-
-Use OAuth2 Authorization Server (Keycloak/Cognito) as IdP.
-
-Partner apps use client credentials flow to obtain tokens.
-
-Resource servers validate JWT locally using IdP’s JWKS endpoint (no network call on each request).
-
-Use scopes and roles:
-
-rewards.read, rewards.write, rewards.redeem
-
-Protect Kafka: use mTLS or SASL/SCRAM with IAM policies for MSK.
-
-Secrets: store DB connections and client secrets in AWS Secrets Manager; do not bake secrets into images.
-
-Network segmentation: ECS tasks / EKS pods in private subnets with security groups restricting access to MSK, RDS, ElastiCache.
-
-Rate limiting: API Gateway enforces quotas per client. Throttle redemption endpoints more strictly.
-
-9. Resiliency and reliability
-
-Resilience patterns:
-
-Circuit Breaker & Retry (Resilience4j) for synchronous upstream calls (Auth introspection, if used).
-
-Bulkheads for upstreams to protect CPUs.
-
-Retries with exponential backoff on network errors, but not for 4xx errors.
-
-Idempotency:
-
-Store eventId / redeemRequestId in RDS (or Redis) as processed marker; reject duplicates.
-
-Durability:
-
-Kafka for durable event storage; use at-least-once semantics.
-
-Consumers must be idempotent.
-
-Back-pressure and throttling:
-
-Producers (partners) have quotas enforced at API Gateway.
-
-Consumers monitor backlog and scale using HPA based on consumer lag metrics.
-
-Disaster recovery:
-
-RDS snapshots, cross-region replication if required.
-
-MSK cross-region replication or failover strategy.
-
-10. Caching strategy
-
-What to cache:
-
-Customer balance (hot), recent transactions, partner metadata.
-
-Cache layers:
-
-Primary: ElastiCache (Redis) with TTL and optimistic locking patterns.
-
-Fallback: in-memory cache for local dev (application-dev.yml uses spring.cache.type=simple).
-
-Cache invalidation:
-
-On updates (award or redeem), update Redis immediately after DB commit (transactional outbox recommended).
-
-Use event-driven invalidation: store change in DB, publish event, and consumer updates Redis.
-
-11. Observability and tracing
-
-Metrics:
-
-Expose Micrometer metrics via /actuator/prometheus.
-
-Custom metrics: processed events/sec, consumer lag, points awarded histogram, redemption success/failure counters.
-
-Tracing:
-
-Instrument services with OpenTelemetry (propagate traceparent).
-
-Export to Jaeger/CloudWatch X-Ray.
-
-Logging:
-
-Structured JSON logs with requestId, customerId, eventId.
-
-Log levels controlled by environment.
-
-Dashboards & alerts:
-
-Grafana dashboards: consumer lag, p99 latency, error rates, cache hit ratio.
-
-Alerts: high consumer lag, steady error rate > threshold, DB connection pool exhausted.
-
-Audit:
-
-Persistent audit records in RDS (transaction table). Events are stored in Kafka and can be rehydrated.
-
-12. Local development (dev profile)
-
-Use application-dev.yml for running without Redis or Kafka.
-
-Dev profile features:
-
-spring.cache.type: simple (in-memory cache).
-
-Mocked Kafka producers/consumers (in-memory or embedded Kafka if needed).
-
-Embedded H2 or local PostgreSQL via Docker (optional).
-
-Dev OAuth token generator endpoint /dev/token (permit in SecurityConfig) to get a JWT for Postman tests.
-
-Steps to run locally (Windows without Docker Redis):
-
-Ensure Java 17 is installed. If you don’t have Maven, use the Maven Docker image to build.
-
-Create application-dev.yml under src/main/resources:
+Create file: src/main/resources/application-dev.yml
 
 spring:
   cache:
@@ -407,171 +169,229 @@ logging:
     com.example.rewards: DEBUG
 
 
-Run:
+Run locally (with dev profile)
+
+With Maven (if installed):
 
 mvn -Dspring-boot.run.profiles=dev spring-boot:run
-# Or from IDE set VM arg: -Dspring.profiles.active=dev
 
 
-Get the dev JWT printed on startup or call /dev/token if implemented:
+Or, from your IDE: set VM arg -Dspring.profiles.active=dev and run RewardsApplication.
 
-GET http://localhost:8080/dev/token
+Notes
 
+@Cacheable will use ConcurrentMapCacheManager (in-memory).
 
-Test:
+Use mocked clients or WireMock endpoints for upstream Hotel/Casino/Dining data.
 
-GET http://localhost:8080/api/v1/rewards/{customerId}
-POST http://localhost:8080/api/v1/redeem
+Use an embedded Kafka (testcontainers) or local Kafka for integration testing.
 
-13. Build, containerize and ECR push
+Building, Containerizing and pushing to ECR
 
-Sample steps (CI will run these):
+Dockerfile (example pattern)
 
-Build JAR:
+Multi-stage build for projects that produce a WAR/JAR.
 
-mvn clean package -DskipTests
+Example steps:
 
+Build stage: use Maven container to build artifact.
 
-Build Docker image:
+Runtime stage: use JRE / Tomcat or run java -jar.
 
+Copy artifact into final image.
+
+Build locally via Docker (no Maven installed)
+
+# Build using Maven image to produce JAR
+docker run --rm -v "$PWD":/app -w /app maven:3.9.4-eclipse-temurin-17 mvn -DskipTests clean package
+
+# Build image
 docker build -t rewards-service:latest .
 
+# Authenticate to ECR
+aws ecr get-login-password --region <AWS_REGION> | docker login --username AWS --password-stdin <ACCOUNT>.dkr.ecr.<AWS_REGION>.amazonaws.com
 
-Authenticate Docker to ECR:
-
-aws ecr get-login-password --region <REGION> | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
-
-
-Tag & push:
-
-docker tag rewards-service:latest <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/rewards-service:latest
-docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/rewards-service:latest
+# Tag & push
+docker tag rewards-service:latest <ACCOUNT>.dkr.ecr.<AWS_REGION>.amazonaws.com/rewards-service:latest
+docker push <ACCOUNT>.dkr.ecr.<AWS_REGION>.amazonaws.com/rewards-service:latest
 
 
-(Optional) Use multi-arch or multi-stage Dockerfile to build inside container in CI pipeline.
+CI/CD pipeline (high level)
 
-CI note: Build and push should be triggered on merge to main with semantic version tags. Keep images immutable and tagged by commit SHA.
+GitHub Actions / CodePipeline:
 
-14. Kubernetes / ECS deployment notes
+Checkout
 
-Use Helm charts for EKS; use task definitions for ECS.
+Maven build -> run tests -> package
 
-Secrets: mount from AWS Secrets Manager or SSM Parameter Store via CSI driver.
+Build Docker image -> tag
 
-Health checks:
+Push image to ECR
 
-Liveness: /actuator/health/liveness
+Deploy to ECS / update task definition (or push manifest to EKS)
 
-Readiness: /actuator/health/readiness
+Deployment guide — AWS ECS (Fargate) + MSK
 
-Auto-scaling:
+Prerequisites
 
-Horizontal Pod Autoscaler (CPU/memory or custom metrics like consumer lag).
+ECR repository for each service
 
-Networking:
+VPC with subnets and security groups (private subnets for ECS tasks & MSK)
 
-Place services in private subnets; use NAT gateway for outbound access to S3 or IdP if needed.
+MSK cluster provisioned with required topics
 
-Service Mesh:
+RDS instance (Postgres) and ElastiCache (Redis)
 
-Optional Istio/Linkerd for mTLS, traffic shifting, retries.
+Secrets stored in AWS Secrets Manager (DB creds, OAuth client secrets)
 
-Rolling update strategy:
+CloudWatch log groups and IAM roles for ECS tasks
 
-Use readiness probes; gradually update with canary if required.
+Core steps
 
-15. CI/CD and release strategy
+Push images to ECR (see above).
 
-Pipelines:
+Create IAM roles: ECS task role and execution role.
 
-build → compile, unit tests, static analysis (spotbugs/checkstyle)
+Create task definitions (container definitions, env vars, secrets).
 
-integration → run contract tests with WireMock/embedded Kafka
+Create ECS service (Fargate) with desired count and autoscaling policies.
 
-image-build → Docker build, scan image, tag
+Configure MSK consumer groups in your services; wire brokers via VPC endpoints.
 
-deploy-staging → deploy to staging cluster
+Configure ALB or API Gateway with target groups pointing to ECS services.
 
-smoke-tests → run post-deploy tests
+Setup health checks, liveness & readiness endpoints via Spring Actuator.
 
-promote-prod → manual approval to deploy to production
+Configure CloudWatch alarms (error rate, CPU, consumer lag).
 
-Rollback strategy:
+Deploy and verify topic consumption and event flow.
 
-Keep previous image tag available; if failures exceed threshold in monitoring, rollback via deployment revision.
+Security
 
-Canary deployments:
+Authentication & Authorization
 
-Use weighted traffic routing to test new version on a small percentage before full rollout.
+Use an OAuth2 Authorization Server (Keycloak / Cognito / custom Auth Service).
 
-16. Testing strategy
+For machine-to-machine, prefer Client Credentials flow.
 
-Unit tests: pure logic classes (calculator, validation).
+Use JWTs signed by IdP; services validate JWT locally against JWKS endpoint.
 
-Integration tests:
+Secrets
 
-WireMock for upstream HTTP stubs (Auth Service).
+Use AWS Secrets Manager to retrieve DB credentials, OAuth client secrets, and any private keys.
 
-Embedded Kafka or Testcontainers MSK for event flows.
+Grant least-privilege IAM roles to ECS tasks for secrets retrieval.
 
-Testcontainers PostgreSQL for DB interactions.
+Network
 
-Contract tests:
+Place MSK, RDS and ElastiCache in private subnets.
 
-Provider/consumer tests for Kafka topics (schema and semantics).
+Use security groups for least-privileged access (ECS tasks only to MSK brokers and RDS).
+
+Optionally enable mTLS between services using Service Mesh.
+
+Data protection
+
+Encrypt RDS and EBS volumes at rest.
+
+Use TLS for all service-to-service and external communications.
+
+Resilience & Observability
+
+Resilience
+
+Use Resilience4j pattern for retries, circuit-breakers, and bulkheads at adapter boundaries.
+
+Use bounded thread pools for Kafka consumer processing to avoid resource exhaustion.
+
+Configure graceful shutdown and idempotent consumers to handle reprocessing.
+
+Observability
+
+Use Spring Boot Actuator: /actuator/health, /actuator/metrics, /actuator/prometheus.
+
+Emit and scrape Prometheus metrics (prometheus micrometer) and forward to CloudWatch (or use Prometheus + Grafana).
+
+Correlate logs using a request id (MDC) and include trace ids in logs (OpenTelemetry).
+
+Monitor Kafka consumer lag, processing error rate, and downstream service latencies.
+
+Testing strategy
+
+Unit tests (JUnit 5, Mockito) for controllers, service logic and the rewards calculator rules.
+
+Contract tests (Pact / WireMock) for upstream integrations (hotel/casino/dining).
+
+Integration tests using Testcontainers:
+
+local Kafka container
+
+embedded Postgres or containerized Postgres
+
+local Redis / embedded cache for verification
 
 End-to-end tests:
 
-Deploy to ephemeral environment and run scenario tests (award → redeem flow).
+Deploy to a staging environment wired to MSK and run full flow: publish event → Rewards consumes → confirm DB & emitted event.
 
-17. Troubleshooting & runbook snippets
+Monitoring & runbooks
 
-Consumer lag high:
+Key dashboards:
 
-Check consumer application logs; inspect kafka-consumer-groups --describe --group <group> to see offsets; scale consumers based on lag.
+Request latency (API Gateway / ALB)
 
-Unexpected 401:
+Rewards processing latency and throughput
 
-Confirm token iss and aud claims match expected values; validate JWKS keys.
+Kafka consumer lag per topic / partition
 
-Cache inconsistency after redemption:
+Error rates and exceptions per service
 
-Ensure DB update is committed before publishing event or implement transactional outbox pattern.
+Redis hit ratio and RDS query latency
 
-Dead-lettered events:
+Runbook essentials:
 
-Inspect dead-letter topic; reprocess after fixing root cause with a replay utility or a manual replayer.
+How to recover from consumer lag: check MSK health, scale consumer tasks, inspect errors.
 
-Database connection issues:
+How to reprocess events: use offsets to reconsume or create consumer tool to read historical topic.
 
-Check connection pool size; ensure RDS security group allows application traffic.
+Rolling upgrade steps: drain connections, update task definition, validate health checks.
 
-18. Tradeoffs and alternatives
+Tradeoffs and alternatives
 
 Runtime calculation vs ledger:
 
-Runtime: always current, simpler for fresh data, but higher compute per request.
+Runtime pros: always up-to-date, simpler data model, easier reconciliation.
 
-Ledger: efficient read for frequent queries, more storage and complexity for reconciliation. A hybrid approach (runtime + cached snapshots or nightly precomputation) is often optimal.
+Runtime cons: computation cost and latency on heavy requests. Alternative: maintain hybrid approach — snapshot aggregates for high-volume customers.
 
-Kafka vs direct synchronous:
+MSK vs SNS/SQS:
 
-Kafka decouples and scales; provides durable events for auditing and replay. It adds operational complexity (MSK/EKS).
+Kafka fits high-throughput, ordered streaming with exactly-once or at-least-once semantics.
 
-Synchronous APIs are simpler but couple systems tightly and can block partner flows.
+SNS/SQS is simpler for fanout/queueing but lacks the rich stream processing semantics.
 
-Sidecar vs OAuth2:
+OAuth2 vs sidecar:
 
-Sidecar offloads validation but increases operational footprint.
+OAuth2 (IdP + JWT) is the recommended, standardized approach for internal and partner security.
 
-OAuth2 with local JWT validation scales better and follows standard practices; recommended for multi-team enterprises.
+Sidecar can be used to enforce policy at the host level or with a service mesh.
 
-19. Next steps and extensions
+Operation checklist (pre-deploy)
 
-Implement transactional outbox to ensure DB → Kafka consistency.
+ Infra defined and tested via Terraform (VPC, MSK, RDS, ElastiCache, ECR, ECS)
 
-Add schema registry for event versioning.
+ ECR repositories created and images pushed
 
-Implement fine-grained role and scope model for partner-specific privileges.
+ IAM roles and policies validated (least privilege)
 
-Add reconciliation job to compare events vs RDS data and repair inconsistencies.
+ Secrets added to Secrets Manager
+
+ Health checks and readiness endpoints implemented
+
+ Actuator endpoints enabled and secured (not publicly exposed)
+
+ Logging and monitoring configured (CloudWatch + Prometheus)
+
+ CI pipeline configured to run tests and push images
+
+ Run smoke tests in staging (end-to-end)
